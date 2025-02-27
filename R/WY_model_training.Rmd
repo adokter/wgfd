@@ -18,20 +18,39 @@ library(tidyr)
 ### Code to train WY composite data to eBird grid for state-wide map
 ####################################################################
 
+
+wy_grid <- read.csv("gis/wy_grid.csv")
+wyoming_raster <- rast('gis/srd_3km_mask_land.tif')
+
 ### radar means data
 vid_cell_week_hour <- read.csv("gis/new_vid_cell_week_hour.csv")
 
-### gridded eBird data
-wy_grid <- read.csv("gis/wy_grid.csv")
+### adjacency matrix (8-direction)
+adj_matrix <- adjacent(wyoming_raster, cells = wy_grid$srd_id, 
+                       directions = 8, pairs = TRUE)
+adj_df <- as.data.frame(adj_matrix)
 
-### remove extra column "X"
-vid_cell_week_hour<-dplyr::select(vid_cell_week_hour,-X)
+df_neighbors <- vid_cell_week_hour %>%
+  left_join(
+    adj_df,
+    by = c("cell" = "from"),
+    relationship = "many-to-many"
+  ) %>%
+  left_join(
+    vid_cell_week_hour %>% select(cell, week, hour, season, mean),
+    by = c("to" = "cell", "week", "hour", "season"),
+    suffix = c("", "_neighbor"),
+    relationship = "many-to-many"
+  ) %>%
+  group_by(cell, week, hour, season) %>%
+  summarise(mean = first(mean), mean_adj = mean(mean_neighbor, na.rm = TRUE), .groups = "drop")
+
 
 ### rename column to cell
 colnames(wy_grid)[1]<-c("cell")
 
 ### join the data 
-WY_XG<-dplyr::left_join(vid_cell_week_hour, wy_grid, by = "cell") #1,420,573 obs with 269 variables
+WY_XG<-dplyr::left_join(df_neighbors, wy_grid, by = "cell") #1,420,573 obs with 269 variables
 
 ### remove cell_on_land, and year (since we only have 2023)
 WY_XG<-dplyr::select(WY_XG,-cell_on_land, year)
@@ -183,8 +202,6 @@ knitr::kable(evaluation_metrics, caption = "Model Evaluation Metrics")
 # Or use DT::datatable for an interactive table
 library(DT)
 datatable(evaluation_metrics, caption = "Model Evaluation Metrics")
-
-
 
 
 
