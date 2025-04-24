@@ -88,6 +88,7 @@ non_test    <- WY_XG %>% filter(!week %in% test_weeks)
 folds <- groupKFold(non_test$week, k = 5)
 
 
+
 dtrain <- xgb.DMatrix(
   data  = data.matrix(non_test %>% dplyr::select(-mean)),
   label = non_test$mean
@@ -103,6 +104,10 @@ params <- list(
   tree_method      = "hist",
   nthread          = parallel::detectCores()
 )
+
+
+#k-fold cross validation, we average RMSE across k folds,
+#all 2K rounds were used (early stopping was not triggered)
 
 cv <- xgb.cv(
   params                = params,
