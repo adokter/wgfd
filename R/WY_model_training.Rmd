@@ -146,7 +146,7 @@ logistic_coef <- function(z, z0 = 3100, k = 300)
   1 / (1 + exp((z - z0) / k))
 
 wy_grid <- wy_grid %>%
-  mutate(alt_coef = logistic_coef(elevation_250m_median, z0 = 2500, k = 300))
+  mutate(alt_coef = logistic_coef(elevation_250m_median, z0 = 3100, k = 300))
 
 
 z_vals <- seq(0, 4000, by = 10)
@@ -154,8 +154,8 @@ plot(z_vals,
      logistic_coef(z_vals, 3100, 300),
      type = "l", lwd = 2, col = "steelblue",
      xlab = "elevation (m)", ylab = "coefficient",
-     main = "Altitude penalty (midpoint 1800m)")
-abline(v = 1800, h = 0.5, lty = "dashed", col = "grey70")
+     main = "Altitude penalty (midpoint 3100m)")
+abline(v = 3100, h = 0.5, lty = "dashed", col = "grey70")
 
 
 #extract importance matrix
