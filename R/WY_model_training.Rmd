@@ -13,6 +13,9 @@ library(ggplot2) # plotting
 library(patchwork) # plot layout
 library(data.table) # to work with xgboost data format
 library(tidyr)
+library(terra)
+library(logger)
+log_threshold(DEBUG)
 
 ####################################################################
 ### Code to train WY composite data to eBird grid for state-wide map
@@ -25,188 +28,145 @@ wyoming_raster <- rast('gis/srd_3km_mask_land.tif')
 ### radar means data
 vid_cell_week_hour <- read.csv("gis/new_vid_cell_week_hour.csv")
 
-### adjacency matrix (8-direction)
-adj_matrix <- adjacent(wyoming_raster, cells = wy_grid$srd_id, 
-                       directions = 8, pairs = TRUE)
-adj_df <- as.data.frame(adj_matrix)
+# define orography-related features
+slope_features <- c(
+  "bathymetry_slope_median", "bathymetry_slope_sd",
+  "shoreline_slope_mean",    "shoreline_slope_sd",
+  "elevation_250m_median",   "elevation_250m_sd",
+  "elevation_30m_median",    "elevation_30m_sd",
+  "bathymetry_elevation_median", "bathymetry_elevation_sd",
+  "northness_1km_median",    "northness_1km_sd",
+  "eastness_1km_median",     "eastness_1km_sd",
+  "northness_90m_median",    "northness_90m_sd",
+  "eastness_90m_median",     "eastness_90m_sd",
+  "mountain"
+)
 
-df_neighbors <- vid_cell_week_hour %>%
-  left_join(
-    adj_df,
-    by = c("cell" = "from"),
-    relationship = "many-to-many"
-  ) %>%
-  left_join(
-    vid_cell_week_hour %>% select(cell, week, hour, season, mean),
-    by = c("to" = "cell", "week", "hour", "season"),
-    suffix = c("", "_neighbor"),
-    relationship = "many-to-many"
-  ) %>%
-  group_by(cell, week, hour, season) %>%
-  summarise(mean = first(mean), mean_adj = mean(mean_neighbor, na.rm = TRUE), .groups = "drop")
+#build a multi‐layer SpatRaster, one layer per slope feature
+r_stack <- rast()
+for (feat in slope_features) {
+  r <- wyoming_raster
+  values(r) <- wy_grid[[feat]]
+  names(r) <- feat
+  r_stack <- c(r_stack, r)
+}
 
+#enable a progress bar 
+terraOptions(progress = TRUE)
 
-### rename column to cell
+#compute the 11×11 (5‐cell radius) moving‐window mean for all layers
+w <- matrix(1, nrow = 11, ncol = 11)
+r_adj_stack <- focal(
+  r_stack,
+  w     = w,
+  fun   = mean,
+  na.rm = TRUE
+)
+
+adj_df <- terra::extract(
+  r_adj_stack,
+  wy_grid$srd_id   # vector of raster‐cell indexes
+)
+
+names(adj_df) <- paste0(slope_features, "_adj")
+adj_df$cell <- wy_grid$srd_id
+
 colnames(wy_grid)[1]<-c("cell")
 
-### join the data 
-WY_XG<-dplyr::left_join(df_neighbors, wy_grid, by = "cell") #1,420,573 obs with 269 variables
+### join the data with adj
+all_geo_features_df <-dplyr::left_join(adj_df, wy_grid, by = "cell") 
+WY_XG <- dplyr::left_join(vid_cell_week_hour, all_geo_features_df, by = "cell") 
 
-### remove cell_on_land, and year (since we only have 2023)
-WY_XG<-dplyr::select(WY_XG,-cell_on_land, year)
+### remove unnecessary feature names
+WY_XG<-dplyr::select(WY_XG,-cell_on_land, -year, -longitude, -latitude, -cell, -X, -x, -y)
 
-WY_XG <- WY_XG %>%
-  dplyr::select(-x, -y, -longitude, -latitude, -cell)
 
-### Divide data into training set (70%) to train model, validation set (20%) for model tuning, and test set (10%) for evaluation 
+set.seed(42)
+all_weeks   <- sort(unique(WY_XG$week))
+test_weeks  <- sample(all_weeks, size = round(0.10 * length(all_weeks)))
+non_test    <- WY_XG %>% filter(!week %in% test_weeks)
+folds <- groupKFold(non_test$week, k = 5)
 
-### to reproduce
-set.seed(123)  
 
-### shuffle data (default is sample wihout replacement)
-shuffled_data <- WY_XG %>% sample_frac(1, replace = FALSE)
-
-### Get number of rows of the data
-n <- nrow(shuffled_data)
-
-### estimates 70% of data for training set
-train_index <- floor(0.7 * n)
-
-### 
-val_index <- floor(0.9 * n)
-
-### split the data
-training_set <- shuffled_data[1:train_index, ]
-validation_set <- shuffled_data[(train_index + 1):val_index, ]
-test_set <- shuffled_data[(val_index + 1):n, ]
-
-### Convert to XGBoost matrix
-# training set
 dtrain <- xgb.DMatrix(
-  data = data.matrix(training_set %>% dplyr::select(-mean)), 
-  label = training_set$mean
+  data  = data.matrix(non_test %>% dplyr::select(-mean)),
+  label = non_test$mean
 )
 
-# validation set 
-dvalid <- xgb.DMatrix(
-  data = data.matrix(validation_set %>% dplyr::select(-mean)), 
-  label = validation_set$mean
+params <- list(
+  objective        = "reg:squarederror",
+  eval_metric      = "rmse",
+  eta              = 0.1,
+  max_depth        = 5,
+  subsample        = 0.8,
+  colsample_bytree = 0.8,
+  tree_method      = "hist",
+  nthread          = parallel::detectCores()
 )
 
-# test set
-dtest <- xgb.DMatrix(
-  data = data.matrix(test_set %>% dplyr::select(-mean)), 
-  label = test_set$mean
+cv <- xgb.cv(
+  params                = params,
+  data                  = dtrain,
+  folds                 = folds,
+  nrounds               = 2000,
+  early_stopping_rounds = 50,
+  verbose               = 1
 )
 
-### evals for model training (replaces "watchlist" in earlier versions of xgboost)
-evals <- list(train = dtrain, test = dvalid)
 
-### Train the model with xgboost default parameters
 
 WY_model <- xgb.train(
-    params = list(
-    booster = "gbtree",           
-    objective = "reg:squarederror",
-    alpha = 0.1),
-    data = dtrain,
-    nrounds = 10000,   
-    nthread = 10,
-    evals = evals,              
-    early_stopping_rounds = 10,      
-    verbose = 1                      
+  params  = cv$params,   # reuse the same param list
+  data    = dtrain,      # dtrain was built from *non-test* rows
+  nrounds = best_n       # no early stopping here
 )
 
 
-### save feature names from the training set since by default xgboost doesn't save
-feature_names <- colnames(training_set %>% dplyr::select(-mean))
-saveRDS(feature_names, "gis/feature_names.rds")
+test_rows <- WY_XG %>% filter(week %in% test_weeks)
+
+dtest <- xgb.DMatrix(
+  data  = data.matrix(test_rows %>% dplyr::select(-mean)),
+  label = test_rows$mean
+)
+
+y_hat <- predict(WY_model, dtest)
+y_obs <- getinfo(dtest, "label")
+
+#compute R-squared
+ss_res <- sum((y_obs - y_hat)^2)             # residual sum-of-squares
+ss_tot <- sum((y_obs - mean(y_obs))^2)       # total sum-of-squares
+r2      <- 1 - ss_res / ss_tot
+
+cat("Test R²:", round(r2, 3), "\n")
 
 
-### save the model
-#xgb.save(WY_model, "~/Desktop/WY_XGBoost/WY_model.xgb")
+
+#plot altitude penalty
+logistic_coef <- function(z, z0 = 3100, k = 300)
+  1 / (1 + exp((z - z0) / k))
+
+wy_grid <- wy_grid %>%
+  mutate(alt_coef = logistic_coef(elevation_250m_median, z0 = 2500, k = 300))
 
 
-### load the model (if not already in environment)
-WY_model <- xgb.load("~/Desktop/WY_XGBoost/WY_model.xgb")
+z_vals <- seq(0, 4000, by = 10)
+plot(z_vals,
+     logistic_coef(z_vals, 3100, 300),
+     type = "l", lwd = 2, col = "steelblue",
+     xlab = "elevation (m)", ylab = "coefficient",
+     main = "Altitude penalty (midpoint 1800m)")
+abline(v = 1800, h = 0.5, lty = "dashed", col = "grey70")
 
-### load the feature names
-feature_names <- readRDS("~/Desktop/WY_XGBoost/feature_names.rds")
 
-### predicts the mean onto the test dataset for evaluation
-predictions <- predict(WY_model, newdata = dtest)
-
-### get the mean from the test set
-actual_mean <- test_set$mean
-
-### calculate RMSE (which you can also grab from the model)
-rmse <- sqrt(mean((predictions - actual_mean)^2))
-ss_total <- sum((actual_mean - mean(actual_mean))^2)
-### residuals
-ss_residual <- sum((actual_mean - predictions)^2)
-### r2
-r_squared <- 1 - (ss_residual / ss_total) #0.94
-
-### Attach predictions to test set
-test_set$predictions <- predictions
-
-### convert to df and map the features back to model
+#extract importance matrix
 importance_matrix <- as.data.frame(xgb.importance(model = WY_model))
 
-### This part is really annoying
-feature_mapping <- setNames(feature_names, paste0("f", seq_along(feature_names) - 1))
-importance_matrix$Feature <- feature_mapping[importance_matrix$Feature]
 
 
-### Plot top 10 features by Gain
-WY_a <- ggplot(importance_matrix[1:10, ], aes(x = reorder(Feature, Gain), y = Gain)) +
-  geom_bar(stat = "identity", fill = "grey40") +
-  coord_flip() +
-  labs(title = "a)", x = "Features", y = "Gain") +
-  theme_classic()
-
-
-### Select top 6 features (can select more but the plot gets messy)
-top_features <- importance_matrix$Feature[1:6]
-
-### Subsample test data otherwise takes too long to plot
-set.seed(42) ### to reproduce
-WY_data_to_plot <- test_set %>%
-  dplyr::select(all_of(top_features), predictions) %>%
-  sample_n(5000)
-
-### Reshape for ggplot
-WY_plot_data <- WY_data_to_plot %>%
-  pivot_longer(cols = all_of(top_features), names_to = "Feature", values_to = "Value") %>%
-  mutate(Feature = factor(Feature, levels = top_features))  
-
-### relationship mean~feature vales
-WY_b <- ggplot(WY_plot_data, aes(x = Value, y = predictions)) +
-  geom_smooth(method = "loess", se = FALSE, color = "grey40") +
-  facet_wrap(~ Feature, ncol = 3, scales = "free_x") +
-  labs(title = "b)", x = "Feature Value", y = "Predicted Mean Density") +
-  theme_classic()
-
-### arrange plot
-WY_combo <- WY_a + WY_b + plot_layout(widths = c(1, 3))
-
-# Create a data frame of your metrics
-evaluation_metrics <- data.frame(
-  Metric = c("RMSE", "R-squared"),
-  Value = c(rmse, r_squared)
-)
-
-# Using knitr::kable for a simple static table
-knitr::kable(evaluation_metrics, caption = "Model Evaluation Metrics")
-
-# Or use DT::datatable for an interactive table
-library(DT)
-datatable(evaluation_metrics, caption = "Model Evaluation Metrics")
-
-
-
-weeks_to_predict <- c(19, 20, 21, 22, 36, 37, 38, 39)
+#make statewide predictions on peak week-hours 
+weeks_to_predict <- c(18, 19, 20, 21, 36, 37, 38, 39)
 hour_to_predict <- 3
+
 
 # Create a full grid of cell-week-hour combinations
 all_combinations <- expand_grid(
@@ -215,24 +175,58 @@ all_combinations <- expand_grid(
   hour = hour_to_predict
 )
 
-all_combinations <- all_combinations %>%
-  anti_join(
-    vid_cell_week_hour %>% distinct(cell), 
-    by = "cell"
-  )
-
 prediction_data <- left_join(all_combinations, wy_grid, by = "cell")
 
-prediction_data <- prediction_data %>% 
-  dplyr::select(-longitude, -latitude, -cell_on_land, -year, -cell)
+prediction_data <- left_join(all_combinations, wy_grid, by = "cell") %>%
+  mutate(alt_coef = logistic_coef(elevation_250m_median, z0 = 3100, k = 300)) %>%
+  select(-longitude, -latitude, -cell_on_land, -year, -cell)
 
 
-dpred <- xgb.DMatrix(data = data.matrix(prediction_data))
+dpred        <- xgb.DMatrix(data.matrix(prediction_data %>% select(-alt_coef)))
+raw_pred     <- predict(WY_model, dpred)
+adj_pred     <- raw_pred * prediction_data$alt_coef
+
 pred_values <- predict(WY_model, newdata = dpred)
-final_predictions <- bind_cols(all_combinations, predictions = pred_values)
+final_predictions <- bind_cols(
+  all_combinations,
+  raw_pred = raw_pred,
+  alt_coef = prediction_data$alt_coef,
+  adj_pred = adj_pred
+)
 
 
+unique_weeks <- sort(unique(final_predictions$week))
+unique_hours <- sort(unique(final_predictions$hour))
+
+# Number of total layers (one per unique (week, hour))
+nlayers <- length(unique_weeks) * length(unique_hours)
+
+# Initialize a multi-layer copy of wyoming_raster
+# Because wyoming_raster is 1 layer, we expand it to 'nlayers'
+r_stack <- rast(wyoming_raster, nlyrs = nlayers)
+values(r_stack) <- NA  # fill all layers with NA initially
+
+# Fill each layer
+k <- 1
+for (w in unique_weeks) {
+  for (h in unique_hours) {
+    # Subset predictions for this (week, hour)
+    sub_pred <- final_predictions %>%
+      filter(week == w, hour == h)
+    
+    r_stack[[k]][sub_pred$cell] <- sub_pred$adj_pred
+    names(r_stack)[k] <- paste0("week", w, "_hour", h)
+    k <- k + 1
+  }
+}
+
+# Write to a single multi-layer GeoTIFF
+writeRaster(r_stack, "gis/final_predictions_multilayer_cv.tif", overwrite = TRUE)
 
 
 ```
+
+
+
+
 
