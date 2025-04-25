@@ -229,6 +229,19 @@ for (w in unique_weeks) {
 writeRaster(r_stack, "gis/final_predictions_multilayer_cv.tif", overwrite = TRUE)
 
 
+
+# already have WY_model from xgb.train()
+imp <- as.data.frame(xgb.importance(model = WY_model))
+
+library(ggplot2)
+ggplot(head(imp[order(-imp$Gain), ], 20),
+       aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top-20 features by total gain",
+       x = NULL, y = "Gain") +
+  theme_minimal(base_size = 13)
+
 ```
 
 
