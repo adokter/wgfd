@@ -242,6 +242,36 @@ ggplot(head(imp[order(-imp$Gain), ], 20),
        x = NULL, y = "Gain") +
   theme_minimal(base_size = 13)
 
+
+WY_a <- ggplot(importance_matrix[1:10, ], aes(x = reorder(Feature, Gain), y = Gain)) +
+   geom_bar(stat = "identity", fill = "grey40") +
+   coord_flip() +
+   labs(title = "a)", x = "Features", y = "Gain") +
+   theme_classic()
+
+top_features <- importance_matrix$Feature[1:10]
+
+WY_data_to_plot <- test_rows %>% 
+    mutate(predictions = y_hat) %>%
+    group_by(week) %>%                 # balance across weeks
+    slice_sample(n = 500) %>%          # 500 per week ⇒ 2 500 rows for 5 weeks
+    ungroup() %>% 
+    select(all_of(top_features), predictions)
+
+WY_plot_data <- WY_data_to_plot %>%
+   pivot_longer(cols = all_of(top_features), names_to = "Feature", values_to = "Value") %>%
+   mutate(Feature = factor(Feature, levels = top_features))  
+
+
+WY_b <- ggplot(WY_plot_data, aes(x = Value, y = predictions)) +
+   #geom_smooth(method = "loess", se = FALSE, color = "grey40") +
+   facet_wrap(~ Feature, ncol = 3, scales = "free_x") +
+   labs(title = "b)", x = "Feature Value", y = "Predicted Mean Density") +
+   theme_classic()
+
+
+WY_combo <- WY_a + WY_b + plot_layout(widths = c(1, 3))
+
 ```
 
 
