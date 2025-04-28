@@ -22,7 +22,7 @@
     └── KRIW_threshold_boundaries.geojson
 ```
 
-#### Bands*
+#### Geotiff*
 
 | band | description |
 |------|-------------|
