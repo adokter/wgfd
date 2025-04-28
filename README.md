@@ -2,7 +2,7 @@
 ├── KCYS / KRIW
 │   ├── R                                       # bioRad ppi objects
 │   ├── images                                  # PNG maps of week–hour VID
-│   └── observed*
+│   └── observed*                               # Geotiffs with rda
 ├── gis                                         # DEM + 3 × 3 km covariate grid
 │   ├── srd_3km_mask_land.tif
 │   └── uswtdb_v7_1_20240814.geojson
@@ -29,10 +29,6 @@
 | **R**   | Range-correction factor applied to VIR/VID |
 | **overlap** | Bhattacharyya overlap (0–1) between beam profile and bird layer |
 | **eta_sum / eta_sum_expected** | Observed vs. expected η at each pixel |
-| **RHOHV** | Copolar correlation coefficient (0–1) |
-| **VRADH** | Horizontal radial velocity (m s⁻¹) |
-| **DBZH**  | Horizontal reflectivity factor (dBZ) |
-| **CELL**  | MistNet weather mask (> 1 = weather, 1 = 5 km fringe, ≤ 0 = clear) |
 | **azimuth** | Pixel bearing from the radar (°) |
 | **adjusted_VID** | VID after azimuth or site-specific corrections |
 | **mask** | 1 = retain, 0/NA = exclude (confidence filter) |
