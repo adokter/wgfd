@@ -8,6 +8,7 @@
 ├── gis                                         # DEM + 3 × 3 km covariate grid
 │   ├── srd_3km_mask_land.tif
 │   └── uswtdb_v7_1_20240814.geojson
+│   └── elev48i0100a.tif
 ├── index.html                                  # interactive map
 ├── model                                       # XGBoost inputs, observed VID, model
 │   ├── WY_model.bin
