@@ -2,7 +2,7 @@
 ├── KCYS / KRIW
 │   ├── R                                       # bioRad ppi objects
 │   ├── images                                  # PNG maps of week–hour VID
-│   └── [observed](#bands) #Geotiff
+│   └── observed*
 ├── gis                                         # DEM + 3 × 3 km covariate grid
 │   ├── srd_3km_mask_land.tif
 │   └── uswtdb_v7_1_20240814.geojson
@@ -20,7 +20,7 @@
     └── KRIW_threshold_boundaries.geojson
 ```
 
-### Bands
+### Bands*
 
 | band | description |
 |------|-------------|
