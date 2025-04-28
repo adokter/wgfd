@@ -37,6 +37,6 @@
 
 *Threshold boundary* polygons (one per radar) define the spatial extent where data quality is considered reliable; they can be used to clip images and to create the `mask` band.
 
-### Interactive visualization
+#### Interactive visualization
 
 [Link](http://wgfd.s3-website-us-east-1.amazonaws.com/)
